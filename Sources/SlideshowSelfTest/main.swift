@@ -21,6 +21,9 @@ let firstRound = (0..<5).compactMap { _ in shuffle.next() }
 check(Set(firstRound) == Set(urls), "shuffle round 1 covers all images without repeat")
 let secondRound = (0..<5).compactMap { _ in shuffle.next() }
 check(Set(secondRound) == Set(urls), "shuffle round 2 covers all images without repeat")
+check(secondRound.first != firstRound.last, "shuffle round boundary does not repeat last image")
+var restarted = PlaybackSequence(urls: urls, order: .shuffle)
+check(restarted.next() != secondRound.last, "restart avoids most recently shown image")
 
 var empty = PlaybackSequence(urls: [], order: .shuffle)
 check(empty.next() == nil, "empty library returns nil")
