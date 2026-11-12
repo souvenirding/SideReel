@@ -1,0 +1,8 @@
+.build/
+build/
+vibe_images/
+.firecrawl/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.swiftpm/
