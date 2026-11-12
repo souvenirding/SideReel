@@ -14,6 +14,7 @@ struct PanelView: View {
     @State private var displays: [DisplayInfo] = []
     @State private var imageCount: Int?
     @State private var errorMessage: String?
+    @State private var quitHovering = false
 
     private var appDelegate: AppDelegate? {
         NSApp.delegate as? AppDelegate
@@ -125,6 +126,20 @@ struct PanelView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
+
+            Divider()
+
+            Button(action: { NSApp.terminate(nil) }) {
+                Label("退出 SideReel", systemImage: "power")
+                    .font(.callout)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(quitHovering ? Color.red : Color.secondary)
+            .onHover { quitHovering = $0 }
+            .help("退出应用程序（⌘Q）")
         }
         .padding(16)
         .frame(width: 320)

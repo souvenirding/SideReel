@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setupMainMenu()
         statusItem = StatusItemController(slideshow: slideshow)
 
         idleMonitor.onIdle = { [weak self] in
@@ -55,5 +56,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func stopSlideshow() {
         slideshow.stop()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        slideshow.stop()
+        idleMonitor.stop()
+    }
+
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        appMenu.addItem(
+            withTitle: "退出 SideReel",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        appMenuItem.submenu = appMenu
+        NSApp.mainMenu = mainMenu
     }
 }
