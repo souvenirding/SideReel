@@ -19,19 +19,23 @@ public final class SlideshowController: ObservableObject {
     @Published public private(set) var isRunning = false
     @Published public private(set) var currentURL: URL?
 
-    private var window: SlideshowWindow?
+    private struct Player {
+        let window: SlideshowWindow
+        let imageView: NSImageView
+        let screenName: String
+    }
+
+    private var players: [Player] = []
     private var timer: Timer?
     private var sequence: PlaybackSequence?
     private var interval: TimeInterval = 10
-    private var screenName = ""
     private var activity: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
     private var loadGeneration = 0
-    private let imageView = NSImageView()
 
     public init() {}
 
-    public func start(folder: URL, screen: NSScreen, interval: TimeInterval, order: PlaybackOrder) throws {
+    public func start(folder: URL, screens: [NSScreen], interval: TimeInterval, order: PlaybackOrder) throws {
         stop()
 
         var isDirectory: ObjCBool = false
@@ -41,42 +45,44 @@ public final class SlideshowController: ObservableObject {
         }
         let library = ImageLibrary(folder: folder)
         guard !library.urls.isEmpty else { throw SlideshowError.noImages }
+        guard !screens.isEmpty else { throw SlideshowError.noScreen }
 
         self.interval = min(max(interval, 1), 3600)
-        self.screenName = screen.localizedName
         self.sequence = PlaybackSequence(urls: library.urls, order: order)
 
-        let win = SlideshowWindow(
-            contentRect: screen.frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false,
-            screen: screen
-        )
-        win.setFrame(screen.frame, display: true)
-        win.level = .screenSaver
-        win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
-        win.backgroundColor = .black
-        win.isOpaque = true
-        win.ignoresMouseEvents = false
-        win.isReleasedWhenClosed = false
+        for screen in screens {
+            let win = SlideshowWindow(
+                contentRect: screen.frame,
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false,
+                screen: screen
+            )
+            win.setFrame(screen.frame, display: true)
+            win.level = .screenSaver
+            win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+            win.backgroundColor = .black
+            win.isOpaque = true
+            win.ignoresMouseEvents = false
+            win.isReleasedWhenClosed = false
 
-        let view = ClickExitView(frame: NSRect(origin: .zero, size: screen.frame.size))
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.black.cgColor
-        view.onExit = { [weak self] in self?.stop() }
+            let view = ClickExitView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            view.wantsLayer = true
+            view.layer?.backgroundColor = NSColor.black.cgColor
+            view.onExit = { [weak self] in self?.stop() }
 
-        imageView.frame = view.bounds
-        imageView.autoresizingMask = [.width, .height]
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.wantsLayer = true
-        imageView.animates = false
-        view.addSubview(imageView)
+            let imageView = NSImageView(frame: view.bounds)
+            imageView.autoresizingMask = [.width, .height]
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.wantsLayer = true
+            imageView.animates = false
+            view.addSubview(imageView)
 
-        win.contentView = view
-        win.makeKeyAndOrderFront(nil)
+            win.contentView = view
+            win.makeKeyAndOrderFront(nil)
+            players.append(Player(window: win, imageView: imageView, screenName: screen.localizedName))
+        }
         NSApp.activate()
-        window = win
 
         activity = ProcessInfo.processInfo.beginActivity(
             options: .idleDisplaySleepDisabled,
@@ -98,7 +104,8 @@ public final class SlideshowController: ObservableObject {
         }
         t.tolerance = self.interval * 0.1
         timer = t
-        NSLog("SideReel: started on \(screen.localizedName), \(library.urls.count) images, interval \(self.interval)s")
+        let names = screens.map { $0.localizedName }.joined(separator: ", ")
+        NSLog("SideReel: started on \(names), \(library.urls.count) images, interval \(self.interval)s")
     }
 
     public func stop() {
@@ -113,11 +120,13 @@ public final class SlideshowController: ObservableObject {
             NotificationCenter.default.removeObserver(screenObserver)
             self.screenObserver = nil
         }
-        window?.orderOut(nil)
-        window?.close()
-        window = nil
+        for player in players {
+            player.imageView.image = nil
+            player.window.orderOut(nil)
+            player.window.close()
+        }
+        players = []
         sequence = nil
-        imageView.image = nil
         if isRunning {
             isRunning = false
             NSLog("SideReel: stopped")
@@ -125,12 +134,21 @@ public final class SlideshowController: ObservableObject {
     }
 
     private func handleScreenChange() {
-        guard isRunning, let win = window else { return }
-        guard let screen = NSScreen.screens.first(where: { $0.localizedName == screenName }) else {
-            stop()
-            return
+        guard isRunning else { return }
+        var kept: [Player] = []
+        for player in players {
+            if let screen = NSScreen.screens.first(where: { $0.localizedName == player.screenName }) {
+                player.window.setFrame(screen.frame, display: true)
+                kept.append(player)
+            } else {
+                player.window.orderOut(nil)
+                player.window.close()
+            }
         }
-        win.setFrame(screen.frame, display: true)
+        players = kept
+        if players.isEmpty {
+            stop()
+        }
     }
 
     private func showNext() {
@@ -142,12 +160,14 @@ public final class SlideshowController: ObservableObject {
             DispatchQueue.main.async {
                 guard let self, self.isRunning, self.loadGeneration == generation else { return }
                 guard let image else { return }
-                let fade = CATransition()
-                fade.duration = 0.45
-                fade.type = .fade
-                fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                self.imageView.layer?.add(fade, forKey: kCATransition)
-                self.imageView.image = image
+                for player in self.players {
+                    let fade = CATransition()
+                    fade.duration = 0.45
+                    fade.type = .fade
+                    fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    player.imageView.layer?.add(fade, forKey: kCATransition)
+                    player.imageView.image = image
+                }
                 self.currentURL = url
             }
         }

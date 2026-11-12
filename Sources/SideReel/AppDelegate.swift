@@ -38,13 +38,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let defaults = UserDefaults.standard
         let folderPath = defaults.string(forKey: ConfigKeys.folderPath) ?? ""
         guard !folderPath.isEmpty else { return "请先选择图片文件夹。" }
-        guard let screen = ScreenUtils.screen(named: defaults.string(forKey: ConfigKeys.screenName) ?? "") else {
-            return SlideshowError.noScreen.localizedDescription
+
+        let names = (defaults.string(forKey: ConfigKeys.screenNames) ?? "")
+            .split(separator: "\n").map(String.init)
+        let screens: [NSScreen]
+        if names.isEmpty {
+            guard let target = ScreenUtils.defaultTarget() else {
+                return SlideshowError.noScreen.localizedDescription
+            }
+            screens = [target]
+        } else {
+            screens = ScreenUtils.screens(matching: names)
+            guard !screens.isEmpty else { return SlideshowError.noScreen.localizedDescription }
         }
+
         do {
             try slideshow.start(
                 folder: URL(fileURLWithPath: folderPath),
-                screen: screen,
+                screens: screens,
                 interval: defaults.double(forKey: ConfigKeys.interval),
                 order: defaults.bool(forKey: ConfigKeys.shuffle) ? .shuffle : .sequential
             )

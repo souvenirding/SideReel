@@ -44,4 +44,8 @@ public enum ScreenUtils {
         guard !name.isEmpty else { return defaultTarget() }
         return NSScreen.screens.first { $0.localizedName == name } ?? defaultTarget()
     }
+
+    public static func screens(matching names: [String]) -> [NSScreen] {
+        names.compactMap { name in NSScreen.screens.first { $0.localizedName == name } }
+    }
 }

@@ -4,15 +4,15 @@ import SwiftUI
 
 struct PanelView: View {
     @AppStorage(ConfigKeys.folderPath) private var folderPath = ""
-    @AppStorage(ConfigKeys.screenName) private var screenName = ""
+    @AppStorage(ConfigKeys.screenNames) private var screenNamesRaw = ""
     @AppStorage(ConfigKeys.interval) private var interval = 10.0
     @AppStorage(ConfigKeys.shuffle) private var shuffle = true
     @AppStorage(ConfigKeys.idleEnabled) private var idleEnabled = false
     @AppStorage(ConfigKeys.idleMinutes) private var idleMinutes = 5
 
     @EnvironmentObject private var slideshow: SlideshowController
+    @StateObject private var counter = FolderImageCounter()
     @State private var displays: [DisplayInfo] = []
-    @State private var imageCount: Int?
     @State private var errorMessage: String?
     @State private var quitHovering = false
 
@@ -33,8 +33,8 @@ struct PanelView: View {
                             Text(folderPath.isEmpty ? "选择图片文件夹…" : folderName)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
-                            if let imageCount {
-                                Text("\(imageCount) 张图片")
+                            if let count = counter.count {
+                                Text("\(count) 张图片")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
@@ -51,17 +51,20 @@ struct PanelView: View {
             }
 
             GroupBox("显示器") {
-                Picker("", selection: $screenName) {
-                    Text("自动（第一个外接显示器）").tag("")
+                VStack(alignment: .leading, spacing: 6) {
                     ForEach(displays) { display in
-                        Text(display.label).tag(display.name)
+                        Toggle(display.label, isOn: screenBinding(for: display.name))
+                            .toggleStyle(.checkbox)
                     }
-                    if !screenName.isEmpty, !displays.contains(where: { $0.name == screenName }) {
-                        Text("\(screenName)（未连接）").tag(screenName)
+                    ForEach(disconnectedNames, id: \.self) { name in
+                        Toggle("\(name)（未连接）", isOn: screenBinding(for: name))
+                            .toggleStyle(.checkbox)
                     }
+                    Text(selectionHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .labelsHidden()
-                .pickerStyle(.menu)
+                .padding(.vertical, 2)
             }
 
             GroupBox("播放") {
@@ -122,7 +125,7 @@ struct PanelView: View {
             .controlSize(.large)
             .disabled(folderPath.isEmpty && !slideshow.isRunning)
 
-            Text("播放时点击该屏幕任意位置或按 Esc 退出")
+            Text("播放时点击任意播放屏幕或按 Esc 退出")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .center)
@@ -145,19 +148,13 @@ struct PanelView: View {
         .frame(width: 320)
         .onAppear {
             displays = ScreenUtils.displays()
+            counter.setFolder(folderPath)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             displays = ScreenUtils.displays()
         }
-        .task(id: folderPath) {
-            guard !folderPath.isEmpty else {
-                imageCount = nil
-                return
-            }
-            let folder = URL(fileURLWithPath: folderPath)
-            imageCount = await Task.detached(priority: .userInitiated) {
-                ImageLibrary(folder: folder).urls.count
-            }.value
+        .onChange(of: folderPath) { _, newPath in
+            counter.setFolder(newPath)
         }
     }
 
@@ -189,6 +186,31 @@ struct PanelView: View {
 
     private var folderName: String {
         URL(fileURLWithPath: folderPath).lastPathComponent
+    }
+
+    private var selectedNames: Set<String> {
+        Set(screenNamesRaw.split(separator: "\n").map(String.init))
+    }
+
+    private var disconnectedNames: [String] {
+        selectedNames.subtracting(displays.map { $0.name }).sorted()
+    }
+
+    private var selectionHint: String {
+        selectedNames.isEmpty
+            ? "未选择时自动使用第一个外接显示器"
+            : "已选 \(selectedNames.count) 台显示器，同时播放"
+    }
+
+    private func screenBinding(for name: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedNames.contains(name) },
+            set: { isOn in
+                var names = selectedNames
+                if isOn { names.insert(name) } else { names.remove(name) }
+                screenNamesRaw = names.sorted().joined(separator: "\n")
+            }
+        )
     }
 
     private func chooseFolder() {
