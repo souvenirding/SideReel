@@ -32,10 +32,11 @@ public final class SlideshowController: ObservableObject {
     private var activity: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
     private var loadGeneration = 0
+    private var keepAwake = true
 
     public init() {}
 
-    public func start(folder: URL, screens: [NSScreen], interval: TimeInterval, order: PlaybackOrder) throws {
+    public func start(folder: URL, screens: [NSScreen], interval: TimeInterval, order: PlaybackOrder, keepAwake: Bool) throws {
         stop()
 
         var isDirectory: ObjCBool = false
@@ -84,10 +85,13 @@ public final class SlideshowController: ObservableObject {
         }
         NSApp.activate()
 
-        activity = ProcessInfo.processInfo.beginActivity(
-            options: .idleDisplaySleepDisabled,
-            reason: "SideReel 正在播放图片轮播"
-        )
+        self.keepAwake = keepAwake
+        if keepAwake {
+            activity = ProcessInfo.processInfo.beginActivity(
+                options: .idleDisplaySleepDisabled,
+                reason: "SideReel 正在播放图片轮播"
+            )
+        }
 
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification,
@@ -130,6 +134,20 @@ public final class SlideshowController: ObservableObject {
         if isRunning {
             isRunning = false
             NSLog("SideReel: stopped")
+        }
+    }
+
+    public func setKeepAwake(_ on: Bool) {
+        keepAwake = on
+        guard isRunning else { return }
+        if on, activity == nil {
+            activity = ProcessInfo.processInfo.beginActivity(
+                options: .idleDisplaySleepDisabled,
+                reason: "SideReel 正在播放图片轮播"
+            )
+        } else if !on, let activity {
+            ProcessInfo.processInfo.endActivity(activity)
+            self.activity = nil
         }
     }
 

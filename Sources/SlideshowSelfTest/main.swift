@@ -70,7 +70,7 @@ func cocoaToCG(_ rect: CGRect) -> CGRect {
 }
 
 do {
-    try controller.start(folder: folder, screens: [screen], interval: 2, order: .shuffle)
+    try controller.start(folder: folder, screens: [screen], interval: 2, order: .shuffle, keepAwake: true)
     check(true, "slideshow started")
 } catch {
     print("FAIL: start threw \(error.localizedDescription)")

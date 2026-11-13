@@ -9,6 +9,7 @@ struct PanelView: View {
     @AppStorage(ConfigKeys.shuffle) private var shuffle = true
     @AppStorage(ConfigKeys.idleEnabled) private var idleEnabled = false
     @AppStorage(ConfigKeys.idleMinutes) private var idleMinutes = 5
+    @AppStorage(ConfigKeys.keepAwake) private var keepAwake = true
 
     @EnvironmentObject private var slideshow: SlideshowController
     @StateObject private var counter = FolderImageCounter()
@@ -87,6 +88,11 @@ struct PanelView: View {
                         Text("秒")
                             .foregroundStyle(.secondary)
                     }
+
+                    Toggle("播放时防止息屏", isOn: $keepAwake)
+                        .onChange(of: keepAwake) { _, on in
+                            slideshow.setKeepAwake(on)
+                        }
                 }
                 .padding(.vertical, 2)
             }

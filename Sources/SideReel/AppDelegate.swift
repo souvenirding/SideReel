@@ -57,7 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 folder: URL(fileURLWithPath: folderPath),
                 screens: screens,
                 interval: defaults.double(forKey: ConfigKeys.interval),
-                order: defaults.bool(forKey: ConfigKeys.shuffle) ? .shuffle : .sequential
+                order: defaults.bool(forKey: ConfigKeys.shuffle) ? .shuffle : .sequential,
+                keepAwake: defaults.bool(forKey: ConfigKeys.keepAwake)
             )
             return nil
         } catch {
