@@ -140,6 +140,10 @@ func startCollagePhase() {
     Timer.scheduledTimer(withTimeInterval: 4.5, repeats: false) { _ in
         let layers = collageLayers()
         check(layers.allSatisfy { $0.sublayers?.first?.contents != nil }, "all collage tiles have images")
+        let base = min(screen.frame.width, screen.frame.height)
+        let widths = layers.map { $0.bounds.width }
+        let inRange = widths.allSatisfy { $0 >= base * 0.239 - 1 && $0 <= base * 0.38 + 1 }
+        check(inRange, "tile widths within 24%~38% of short edge (min \(widths.min() ?? 0), max \(widths.max() ?? 0), base \(base))")
         let visible = layers.filter { $0.opacity > 0.5 }.count
         check(visible >= layers.count / 2, "most collage tiles visible (\(visible)/\(layers.count))")
         let moved = zip(collageStartPositions, layers.map { $0.position })

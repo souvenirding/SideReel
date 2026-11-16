@@ -82,13 +82,14 @@ public final class CollageDriftView: NSView {
         let area = bounds.width * bounds.height
         let base = min(bounds.width, bounds.height)
         guard area > 0, base > 0 else { return }
-        let count = min(max(Int(area / (base * base * 0.035)), 8), 24)
+        let count = min(max(Int(area / (base * base * 0.13)), 6), 18)
         let scale = window?.backingScaleFactor ?? 2
 
         var newTiles: [Tile] = []
         for _ in 0..<count {
             let depth = CGFloat.random(in: 0.6...1.0)
-            let width = base * CGFloat.random(in: 0.20...0.36) * depth
+            // 景深主要影响速度与亮度，尺寸只轻微缩放，避免远处照片小到看不清
+            let width = base * CGFloat.random(in: 0.26...0.38) * (0.8 + 0.2 * depth)
             let center = CGPoint(
                 x: CGFloat.random(in: 0...bounds.width),
                 y: CGFloat.random(in: 0...bounds.height)
