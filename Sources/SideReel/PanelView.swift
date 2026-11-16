@@ -6,6 +6,8 @@ struct PanelView: View {
     @AppStorage(ConfigKeys.folderPath) private var folderPath = ""
     @AppStorage(ConfigKeys.screenNames) private var screenNamesRaw = ""
     @AppStorage(ConfigKeys.interval) private var interval = 10.0
+    @AppStorage(ConfigKeys.playbackMode) private var playbackMode = "slideshow"
+    @AppStorage(ConfigKeys.driftSpeed) private var driftSpeed = 20.0
     @AppStorage(ConfigKeys.shuffle) private var shuffle = true
     @AppStorage(ConfigKeys.idleEnabled) private var idleEnabled = false
     @AppStorage(ConfigKeys.idleMinutes) private var idleMinutes = 5
@@ -70,6 +72,13 @@ struct PanelView: View {
 
             GroupBox("播放") {
                 VStack(alignment: .leading, spacing: 8) {
+                    Picker("", selection: $playbackMode) {
+                        Text("单图轮播").tag("slideshow")
+                        Text("拼贴漂移").tag("collage")
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+
                     Picker("", selection: $shuffle) {
                         Text("随机不重复").tag(true)
                         Text("按顺序").tag(false)
@@ -77,16 +86,31 @@ struct PanelView: View {
                     .labelsHidden()
                     .pickerStyle(.segmented)
 
-                    HStack(spacing: 6) {
-                        Text("切换间隔")
-                        Spacer()
-                        TextField("", value: $interval, format: .number)
-                            .frame(width: 48)
-                            .multilineTextAlignment(.trailing)
-                        Stepper("", value: $interval, in: 1...3600)
-                            .labelsHidden()
-                        Text("秒")
-                            .foregroundStyle(.secondary)
+                    if playbackMode == "collage" {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("漂移速度")
+                            HStack(spacing: 8) {
+                                Text("慢")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Slider(value: $driftSpeed, in: 5...80)
+                                Text("快")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Text("切换间隔")
+                            Spacer()
+                            TextField("", value: $interval, format: .number)
+                                .frame(width: 48)
+                                .multilineTextAlignment(.trailing)
+                            Stepper("", value: $interval, in: 1...3600)
+                                .labelsHidden()
+                            Text("秒")
+                                .foregroundStyle(.secondary)
+                        }
                     }
 
                     Toggle("播放时防止息屏", isOn: $keepAwake)

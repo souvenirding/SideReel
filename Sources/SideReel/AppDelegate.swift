@@ -58,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 screens: screens,
                 interval: defaults.double(forKey: ConfigKeys.interval),
                 order: defaults.bool(forKey: ConfigKeys.shuffle) ? .shuffle : .sequential,
-                keepAwake: defaults.bool(forKey: ConfigKeys.keepAwake)
+                keepAwake: defaults.bool(forKey: ConfigKeys.keepAwake),
+                mode: PlaybackMode(rawValue: defaults.string(forKey: ConfigKeys.playbackMode) ?? "") ?? .slideshow,
+                driftSpeed: defaults.double(forKey: ConfigKeys.driftSpeed)
             )
             return nil
         } catch {

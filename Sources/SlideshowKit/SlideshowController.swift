@@ -15,13 +15,19 @@ public enum SlideshowError: LocalizedError {
     }
 }
 
+public enum PlaybackMode: String {
+    case slideshow
+    case collage
+}
+
 public final class SlideshowController: ObservableObject {
     @Published public private(set) var isRunning = false
     @Published public private(set) var currentURL: URL?
 
     private struct Player {
         let window: SlideshowWindow
-        let imageView: NSImageView
+        let imageView: NSImageView?
+        let collageView: CollageDriftView?
         let screenName: String
     }
 
@@ -36,7 +42,15 @@ public final class SlideshowController: ObservableObject {
 
     public init() {}
 
-    public func start(folder: URL, screens: [NSScreen], interval: TimeInterval, order: PlaybackOrder, keepAwake: Bool) throws {
+    public func start(
+        folder: URL,
+        screens: [NSScreen],
+        interval: TimeInterval,
+        order: PlaybackOrder,
+        keepAwake: Bool,
+        mode: PlaybackMode = .slideshow,
+        driftSpeed: Double = 20
+    ) throws {
         stop()
 
         var isDirectory: ObjCBool = false
@@ -72,16 +86,32 @@ public final class SlideshowController: ObservableObject {
             view.layer?.backgroundColor = NSColor.black.cgColor
             view.onExit = { [weak self] in self?.stop() }
 
-            let imageView = NSImageView(frame: view.bounds)
-            imageView.autoresizingMask = [.width, .height]
-            imageView.imageScaling = .scaleProportionallyUpOrDown
-            imageView.wantsLayer = true
-            imageView.animates = false
-            view.addSubview(imageView)
+            var imageView: NSImageView?
+            var collageView: CollageDriftView?
+            if mode == .slideshow {
+                let iv = NSImageView(frame: view.bounds)
+                iv.autoresizingMask = [.width, .height]
+                iv.imageScaling = .scaleProportionallyUpOrDown
+                iv.wantsLayer = true
+                iv.animates = false
+                view.addSubview(iv)
+                imageView = iv
+            } else {
+                let collage = CollageDriftView(
+                    frame: view.bounds,
+                    speed: driftSpeed,
+                    nextURL: { [weak self] in self?.sequence?.next() },
+                    onImageShown: { [weak self] url in self?.currentURL = url }
+                )
+                collage.autoresizingMask = [.width, .height]
+                view.addSubview(collage)
+                collageView = collage
+            }
 
             win.contentView = view
             win.makeKeyAndOrderFront(nil)
-            players.append(Player(window: win, imageView: imageView, screenName: screen.localizedName))
+            collageView?.start()
+            players.append(Player(window: win, imageView: imageView, collageView: collageView, screenName: screen.localizedName))
         }
         NSApp.activate()
 
@@ -102,14 +132,16 @@ public final class SlideshowController: ObservableObject {
         }
 
         isRunning = true
-        showNext()
-        let t = Timer.scheduledTimer(withTimeInterval: self.interval, repeats: true) { [weak self] _ in
-            self?.showNext()
+        if mode == .slideshow {
+            showNext()
+            let t = Timer.scheduledTimer(withTimeInterval: self.interval, repeats: true) { [weak self] _ in
+                self?.showNext()
+            }
+            t.tolerance = self.interval * 0.1
+            timer = t
         }
-        t.tolerance = self.interval * 0.1
-        timer = t
         let names = screens.map { $0.localizedName }.joined(separator: ", ")
-        NSLog("SideReel: started on \(names), \(library.urls.count) images, interval \(self.interval)s")
+        NSLog("SideReel: started on \(names), \(library.urls.count) images, mode \(mode.rawValue), interval \(self.interval)s")
     }
 
     public func stop() {
@@ -125,7 +157,8 @@ public final class SlideshowController: ObservableObject {
             self.screenObserver = nil
         }
         for player in players {
-            player.imageView.image = nil
+            player.collageView?.stop()
+            player.imageView?.image = nil
             player.window.orderOut(nil)
             player.window.close()
         }
@@ -179,12 +212,13 @@ public final class SlideshowController: ObservableObject {
                 guard let self, self.isRunning, self.loadGeneration == generation else { return }
                 guard let image else { return }
                 for player in self.players {
+                    guard let imageView = player.imageView else { continue }
                     let fade = CATransition()
                     fade.duration = 0.45
                     fade.type = .fade
                     fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    player.imageView.layer?.add(fade, forKey: kCATransition)
-                    player.imageView.image = image
+                    imageView.layer?.add(fade, forKey: kCATransition)
+                    imageView.image = image
                 }
                 self.currentURL = url
             }

@@ -56,17 +56,18 @@ print("target screen: \(screen.localizedName) frame=\(screen.frame)")
 let controller = SlideshowController()
 let pid = ProcessInfo.processInfo.processIdentifier
 
-func engineWindow() -> [String: Any]? {
-    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-    return list.first { info in
-        (info[kCGWindowOwnerPID as String] as? pid_t) == pid
-            && (info[kCGWindowLayer as String] as? Int) == Int(CGWindowLevelForKey(.screenSaverWindow))
-    }
+// CGWindowList 在无屏幕录制权限的新系统上会返回失真的占位条目，
+// 窗口几何与可见性以进程内 NSApp.windows 为准。
+func visibleEngineWindow() -> NSWindow? {
+    NSApp.windows.first { $0.level == .screenSaver && $0.isVisible }
 }
 
-func cocoaToCG(_ rect: CGRect) -> CGRect {
-    let primary = NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.screens[0]
-    return CGRect(x: rect.minX, y: primary.frame.height - rect.maxY, width: rect.width, height: rect.height)
+func dumpCGWindows() {
+    guard ProcessInfo.processInfo.environment["SIDEREEL_DEBUG_WINDOWS"] != nil else { return }
+    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+    for info in list where (info[kCGWindowOwnerPID as String] as? pid_t) == pid {
+        print("DEBUG window: \(info)")
+    }
 }
 
 do {
@@ -78,13 +79,11 @@ do {
 }
 
 Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { _ in
-    if let info = engineWindow(),
-       let dict = info[kCGWindowBounds as String] as? [String: Any],
-       let bounds = CGRect(dictionaryRepresentation: dict as CFDictionary) {
-        let expected = cocoaToCG(screen.frame)
-        check(bounds == expected, "window covers target screen exactly (got \(bounds), expected \(expected))")
+    dumpCGWindows()
+    if let window = visibleEngineWindow() {
+        check(window.frame == screen.frame, "window covers target screen exactly (got \(window.frame), expected \(screen.frame))")
     } else {
-        check(false, "slideshow window not found in window list")
+        check(false, "slideshow window not visible")
     }
     check(controller.currentURL != nil, "first image loaded")
 }
@@ -96,16 +95,67 @@ Timer.scheduledTimer(withTimeInterval: 3.5, repeats: false) { _ in
 }
 
 Timer.scheduledTimer(withTimeInterval: 5.0, repeats: false) { _ in
-    check(controller.currentURL != nil && controller.currentURL != firstURL, "image advanced after interval")
+    if library.urls.count > 1 {
+        check(controller.currentURL != nil && controller.currentURL != firstURL, "image advanced after interval")
+    } else {
+        check(controller.currentURL == firstURL, "single-image library keeps showing the only image")
+    }
 }
 
 Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { _ in
     controller.stop()
     check(!controller.isRunning, "controller reports stopped")
     Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
-        check(engineWindow() == nil, "window removed after stop")
-        print(failures == 0 ? "ALL TESTS PASSED" : "\(failures) FAILURES")
-        exit(failures == 0 ? 0 : 1)
+        dumpCGWindows()
+        check(visibleEngineWindow() == nil, "window removed after stop")
+        startCollagePhase()
+    }
+}
+
+func collageLayers() -> [CALayer] {
+    let collage = visibleEngineWindow()?.contentView?.subviews.first { $0 is CollageDriftView }
+    return collage?.layer?.sublayers ?? []
+}
+
+var collageStartPositions: [CGPoint] = []
+func startCollagePhase() {
+    do {
+        try controller.start(
+            folder: folder, screens: [screen], interval: 2, order: .shuffle,
+            keepAwake: true, mode: .collage, driftSpeed: 60
+        )
+        check(true, "collage started")
+    } catch {
+        print("FAIL: collage start threw \(error.localizedDescription)")
+        exit(1)
+    }
+    Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { _ in
+        check(visibleEngineWindow()?.frame == screen.frame, "collage window covers screen")
+        check(controller.currentURL != nil, "collage loaded first tile image")
+        let layers = collageLayers()
+        check(layers.count >= 8, "collage populated \(layers.count) tiles")
+        check(layers.contains { $0.sublayers?.first?.contents != nil }, "collage tiles loading images")
+        collageStartPositions = layers.map { $0.position }
+    }
+    Timer.scheduledTimer(withTimeInterval: 4.5, repeats: false) { _ in
+        let layers = collageLayers()
+        check(layers.allSatisfy { $0.sublayers?.first?.contents != nil }, "all collage tiles have images")
+        let visible = layers.filter { $0.opacity > 0.5 }.count
+        check(visible >= layers.count / 2, "most collage tiles visible (\(visible)/\(layers.count))")
+        let moved = zip(collageStartPositions, layers.map { $0.position })
+            .filter { abs($0.x - $1.x) > 20 || abs($0.y - $1.y) > 2 }
+        check(!collageStartPositions.isEmpty && moved.count >= collageStartPositions.count / 2,
+              "collage tiles drift over time (\(moved.count) moved)")
+    }
+    Timer.scheduledTimer(withTimeInterval: 6.0, repeats: false) { _ in
+        controller.stop()
+        check(!controller.isRunning, "collage reports stopped")
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
+            dumpCGWindows()
+            check(visibleEngineWindow() == nil, "collage window removed after stop")
+            print(failures == 0 ? "ALL TESTS PASSED" : "\(failures) FAILURES")
+            exit(failures == 0 ? 0 : 1)
+        }
     }
 }
 
