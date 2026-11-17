@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SlideshowKit
 import SwiftUI
 
@@ -20,6 +21,8 @@ struct PanelView: View {
     @State private var displays: [DisplayInfo] = []
     @State private var errorMessage: String?
     @State private var quitHovering = false
+    @State private var launchAtLogin = false
+    @State private var launchNeedsApproval = false
 
     private var appDelegate: AppDelegate? {
         NSApp.delegate as? AppDelegate
@@ -149,6 +152,16 @@ struct PanelView: View {
 
             GroupBox("自动开始") {
                 VStack(alignment: .leading, spacing: 8) {
+                    Toggle("开机时启动 SideReel", isOn: $launchAtLogin)
+                        .onChange(of: launchAtLogin) { _, on in
+                            guard on != (SMAppService.mainApp.status == .enabled) else { return }
+                            setLaunchAtLogin(on)
+                        }
+                    if launchNeedsApproval {
+                        Text("需在系统设置 › 通用 › 登录项中允许")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Toggle("闲置后自动开始", isOn: $idleEnabled)
                     if idleEnabled {
                         Picker("闲置时间", selection: $idleMinutes) {
@@ -205,6 +218,7 @@ struct PanelView: View {
         .onAppear {
             displays = ScreenUtils.displays()
             counter.setFolder(folderPath)
+            refreshLaunchAtLogin()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             displays = ScreenUtils.displays()
@@ -273,6 +287,26 @@ struct PanelView: View {
                 screenNamesRaw = names.sorted().joined(separator: "\n")
             }
         )
+    }
+
+    private func setLaunchAtLogin(_ on: Bool) {
+        do {
+            if on {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = "设置开机启动失败：\(error.localizedDescription)"
+        }
+        refreshLaunchAtLogin()
+    }
+
+    private func refreshLaunchAtLogin() {
+        let status = SMAppService.mainApp.status
+        launchAtLogin = status == .enabled
+        launchNeedsApproval = status == .requiresApproval
     }
 
     private func chooseFolder() {
