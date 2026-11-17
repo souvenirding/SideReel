@@ -27,6 +27,7 @@ public final class CollageDriftView: NSView {
     }
 
     private let speed: CGFloat
+    private let tileCount: Int
     private let nextURL: () -> URL?
     private let onImageShown: ((URL) -> Void)?
 
@@ -39,10 +40,12 @@ public final class CollageDriftView: NSView {
     public init(
         frame: NSRect,
         speed: Double,
+        tileCount: Int = 13,
         nextURL: @escaping () -> URL?,
         onImageShown: ((URL) -> Void)? = nil
     ) {
         self.speed = CGFloat(min(max(speed, 4), 120))
+        self.tileCount = min(max(tileCount, 4), 30)
         self.nextURL = nextURL
         self.onImageShown = onImageShown
         super.init(frame: frame)
@@ -82,7 +85,7 @@ public final class CollageDriftView: NSView {
         let area = bounds.width * bounds.height
         let base = min(bounds.width, bounds.height)
         guard area > 0, base > 0 else { return }
-        let count = min(max(Int(area / (base * base * 0.13)), 6), 18)
+        let count = tileCount
         let scale = window?.backingScaleFactor ?? 2
 
         var newTiles: [Tile] = []
@@ -140,6 +143,7 @@ public final class CollageDriftView: NSView {
                 tile.center.x = bounds.width + halfW + 40
                 tile.center.y = CGFloat.random(in: 0...bounds.height)
                 if !tile.loading && !tile.retiring {
+                    tile.layer.removeAllAnimations()
                     tile.layer.opacity = 0
                     loadImage(for: tile, fadeInDelay: 0)
                 }
@@ -180,8 +184,13 @@ public final class CollageDriftView: NSView {
         CATransaction.begin()
         CATransaction.setCompletionBlock { [weak self, weak tile] in
             guard let self, let tile, tile.retiring else { return }
+            // 必须禁用隐式动画：否则 removeAllAnimations 后设置 opacity=0
+            // 会触发 0.25s 的隐式淡出，表现为照片闪回全亮再变暗
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
             tile.layer.removeAllAnimations()
             tile.layer.opacity = 0
+            CATransaction.commit()
             tile.retiring = false
             self.loadImage(for: tile, fadeInDelay: 0)
         }
@@ -203,13 +212,12 @@ public final class CollageDriftView: NSView {
                 let aspect = min(max(CGFloat(image.height) / CGFloat(image.width), 0.6), 1.7)
                 tile.size = CGSize(width: tile.slotWidth, height: tile.slotWidth * aspect)
 
+                // 换图与淡入在同一事务内原子提交，避免新图以旧不透明度闪现一帧
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
                 tile.layer.bounds = CGRect(origin: .zero, size: tile.size)
                 tile.content.frame = tile.layer.bounds
                 tile.content.contents = image
-                CATransaction.commit()
-
                 let fadeIn = CABasicAnimation(keyPath: "opacity")
                 fadeIn.fromValue = 0
                 fadeIn.toValue = tile.targetOpacity
@@ -219,6 +227,7 @@ public final class CollageDriftView: NSView {
                 fadeIn.fillMode = .backwards
                 tile.layer.opacity = tile.targetOpacity
                 tile.layer.add(fadeIn, forKey: "appear")
+                CATransaction.commit()
                 self.onImageShown?(url)
             }
         }

@@ -8,6 +8,7 @@ struct PanelView: View {
     @AppStorage(ConfigKeys.interval) private var interval = 10.0
     @AppStorage(ConfigKeys.playbackMode) private var playbackMode = "slideshow"
     @AppStorage(ConfigKeys.driftSpeed) private var driftSpeed = 20.0
+    @AppStorage(ConfigKeys.tileCount) private var tileCount = 13
     @AppStorage(ConfigKeys.shuffle) private var shuffle = true
     @AppStorage(ConfigKeys.idleEnabled) private var idleEnabled = false
     @AppStorage(ConfigKeys.idleMinutes) private var idleMinutes = 5
@@ -99,6 +100,18 @@ struct PanelView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+
+                        HStack(spacing: 6) {
+                            Text("同屏照片数")
+                            Spacer()
+                            TextField("", value: $tileCount, format: .number)
+                                .frame(width: 48)
+                                .multilineTextAlignment(.trailing)
+                            Stepper("", value: $tileCount, in: 4...30)
+                                .labelsHidden()
+                            Text("张")
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         HStack(spacing: 6) {
                             Text("切换间隔")
@@ -119,6 +132,9 @@ struct PanelView: View {
                         }
                 }
                 .padding(.vertical, 2)
+                .onChange(of: tileCount) { _, count in
+                    tileCount = min(max(count, 4), 30)
+                }
             }
 
             GroupBox("自动开始") {

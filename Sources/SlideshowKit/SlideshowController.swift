@@ -49,7 +49,8 @@ public final class SlideshowController: ObservableObject {
         order: PlaybackOrder,
         keepAwake: Bool,
         mode: PlaybackMode = .slideshow,
-        driftSpeed: Double = 20
+        driftSpeed: Double = 20,
+        tileCount: Int = 13
     ) throws {
         stop()
 
@@ -100,6 +101,7 @@ public final class SlideshowController: ObservableObject {
                 let collage = CollageDriftView(
                     frame: view.bounds,
                     speed: driftSpeed,
+                    tileCount: tileCount,
                     nextURL: { [weak self] in self?.sequence?.next() },
                     onImageShown: { [weak self] url in self?.currentURL = url }
                 )

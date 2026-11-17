@@ -118,23 +118,36 @@ func collageLayers() -> [CALayer] {
 }
 
 var collageStartPositions: [CGPoint] = []
+var implicitViolations = 0
+var opacitySampler: Timer?
+func checkNoImplicitOpacity(_ layers: [CALayer], _ label: String) {
+    let bad = layers.filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear", "retire"]) }
+    check(bad.isEmpty, "no implicit opacity animations (\(label))")
+}
 func startCollagePhase() {
     do {
         try controller.start(
             folder: folder, screens: [screen], interval: 2, order: .shuffle,
-            keepAwake: true, mode: .collage, driftSpeed: 60
+            keepAwake: true, mode: .collage, driftSpeed: 60, tileCount: 9
         )
         check(true, "collage started")
     } catch {
         print("FAIL: collage start threw \(error.localizedDescription)")
         exit(1)
     }
+    let sampler = Timer(timeInterval: 0.1, repeats: true) { _ in
+        let bad = collageLayers().filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear", "retire"]) }
+        implicitViolations += bad.count
+    }
+    RunLoop.main.add(sampler, forMode: .common)
+    opacitySampler = sampler
     Timer.scheduledTimer(withTimeInterval: 2.5, repeats: false) { _ in
         check(visibleEngineWindow()?.frame == screen.frame, "collage window covers screen")
         check(controller.currentURL != nil, "collage loaded first tile image")
         let layers = collageLayers()
-        check(layers.count >= 8, "collage populated \(layers.count) tiles")
+        check(layers.count == 9, "collage honors configured tile count (got \(layers.count), want 9)")
         check(layers.contains { $0.sublayers?.first?.contents != nil }, "collage tiles loading images")
+        checkNoImplicitOpacity(layers, "2.5s")
         collageStartPositions = layers.map { $0.position }
     }
     Timer.scheduledTimer(withTimeInterval: 4.5, repeats: false) { _ in
@@ -144,6 +157,7 @@ func startCollagePhase() {
         let widths = layers.map { $0.bounds.width }
         let inRange = widths.allSatisfy { $0 >= base * 0.239 - 1 && $0 <= base * 0.38 + 1 }
         check(inRange, "tile widths within 24%~38% of short edge (min \(widths.min() ?? 0), max \(widths.max() ?? 0), base \(base))")
+        checkNoImplicitOpacity(layers, "4.5s")
         let visible = layers.filter { $0.opacity > 0.5 }.count
         check(visible >= layers.count / 2, "most collage tiles visible (\(visible)/\(layers.count))")
         let moved = zip(collageStartPositions, layers.map { $0.position })
@@ -151,7 +165,12 @@ func startCollagePhase() {
         check(!collageStartPositions.isEmpty && moved.count >= collageStartPositions.count / 2,
               "collage tiles drift over time (\(moved.count) moved)")
     }
-    Timer.scheduledTimer(withTimeInterval: 6.0, repeats: false) { _ in
+    Timer.scheduledTimer(withTimeInterval: 5.3, repeats: false) { _ in
+        checkNoImplicitOpacity(collageLayers(), "5.3s")
+    }
+    Timer.scheduledTimer(withTimeInterval: 10.0, repeats: false) { _ in
+        opacitySampler?.invalidate()
+        check(implicitViolations == 0, "no implicit opacity flash across whole collage phase (\(implicitViolations) violations)")
         controller.stop()
         check(!controller.isRunning, "collage reports stopped")
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in

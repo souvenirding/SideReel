@@ -6,6 +6,7 @@ enum ConfigKeys {
     static let interval = "interval"
     static let playbackMode = "playbackMode"
     static let driftSpeed = "driftSpeed"
+    static let tileCount = "tileCount"
     static let shuffle = "shuffle"
     static let idleEnabled = "idleEnabled"
     static let idleMinutes = "idleMinutes"
@@ -23,6 +24,7 @@ enum ConfigKeys {
             interval: 10.0,
             playbackMode: "slideshow",
             driftSpeed: 20.0,
+            tileCount: 13,
             shuffle: true,
             idleEnabled: false,
             idleMinutes: 5,
