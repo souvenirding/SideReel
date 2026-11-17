@@ -174,6 +174,39 @@ public final class CollageDriftView: NSView {
         replaceTimer = t
     }
 
+    // 换图时挑一个新位置：随机采样候选点，选与其他照片重叠最小的空位，
+    // 并强制远离原位置，让"新照片出现在别处"清晰可感
+    private func replacementCenter(for tile: Tile) -> CGPoint {
+        let halfW = tile.size.width / 2
+        let halfH = tile.size.height / 2
+        let margin: CGFloat = 12
+        let xLo = halfW + margin
+        let xHi = bounds.width - halfW - margin
+        guard xLo <= xHi else { return tile.center }
+        let yRange = verticalRange(for: tile)
+        let minDist = min(bounds.width, bounds.height) * 0.3
+        var best = tile.center
+        var bestScore = CGFloat.greatestFiniteMagnitude
+        for _ in 0..<16 {
+            let p = CGPoint(x: .random(in: xLo...xHi), y: .random(in: yRange))
+            var overlap: CGFloat = 0
+            for other in tiles where other !== tile {
+                let dx = min(p.x + halfW, other.center.x + other.size.width / 2)
+                    - max(p.x - halfW, other.center.x - other.size.width / 2)
+                let dy = min(p.y + halfH, other.center.y + other.size.height / 2)
+                    - max(p.y - halfH, other.center.y - other.size.height / 2)
+                if dx > 0, dy > 0 { overlap += dx * dy }
+            }
+            let dist = hypot(p.x - tile.center.x, p.y - tile.center.y)
+            let score = overlap + (dist < minDist ? 1e9 : 0)
+            if score < bestScore {
+                bestScore = score
+                best = p
+            }
+        }
+        return best
+    }
+
     private func replaceOneTile() {
         let candidates = tiles.filter { tile in
             !tile.loading && !tile.retiring
@@ -200,6 +233,8 @@ public final class CollageDriftView: NSView {
             CATransaction.setDisableActions(true)
             tile.layer.removeAllAnimations()
             tile.layer.opacity = 0
+            tile.center = self.replacementCenter(for: tile)
+            tile.layer.position = tile.center
             CATransaction.commit()
             tile.retiring = false
             self.loadImage(for: tile, fadeInDelay: 0)

@@ -123,6 +123,11 @@ func collageLayers() -> [CALayer] {
 var collageStartPositions: [CGPoint] = []
 var implicitViolations = 0
 var verticalViolations = 0
+var replacementsObserved = 0
+var relocationViolations = 0
+var lastContents: [ObjectIdentifier: AnyObject] = [:]
+var lastPositions: [ObjectIdentifier: CGPoint] = [:]
+var pendingJump: [ObjectIdentifier: Bool] = [:]
 var opacitySampler: Timer?
 func checkNoImplicitOpacity(_ layers: [CALayer], _ label: String) {
     let bad = layers.filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear", "retire"]) }
@@ -146,6 +151,22 @@ func startCollagePhase() {
         if let view = collageView() {
             let h = view.bounds.height
             verticalViolations += layers.filter { $0.frame.minY < -0.5 || $0.frame.maxY > h + 0.5 }.count
+        }
+        for layer in layers {
+            let key = ObjectIdentifier(layer)
+            let pos = layer.position
+            // 挪位先于新图到达（异步加载），先记下大位移，等内容变化时消费
+            if let oldPos = lastPositions[key], hypot(pos.x - oldPos.x, pos.y - oldPos.y) > 150 {
+                pendingJump[key] = true
+            }
+            let contents = layer.sublayers?.first?.contents as AnyObject?
+            if let old = lastContents[key], let c = contents, old !== c {
+                replacementsObserved += 1
+                if pendingJump[key] != true { relocationViolations += 1 }
+                pendingJump[key] = false
+            }
+            if let c = contents { lastContents[key] = c }
+            lastPositions[key] = pos
         }
     }
     RunLoop.main.add(sampler, forMode: .common)
@@ -181,6 +202,8 @@ func startCollagePhase() {
         opacitySampler?.invalidate()
         check(implicitViolations == 0, "no implicit opacity flash across whole collage phase (\(implicitViolations) violations)")
         check(verticalViolations == 0, "tiles never clip top/bottom edges (\(verticalViolations) violations)")
+        check(replacementsObserved >= 1, "observed image replacements (\(replacementsObserved))")
+        check(relocationViolations == 0, "replaced photos appear at a new location (\(relocationViolations) violations)")
         controller.stop()
         check(!controller.isRunning, "collage reports stopped")
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
