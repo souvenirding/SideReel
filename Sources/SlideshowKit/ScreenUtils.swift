@@ -48,4 +48,17 @@ public enum ScreenUtils {
     public static func screens(matching names: [String]) -> [NSScreen] {
         names.compactMap { name in NSScreen.screens.first { $0.localizedName == name } }
     }
+
+    public static func selectedScreens(names: [String]) -> [NSScreen] {
+        if names.isEmpty {
+            return defaultTarget().map { [$0] } ?? []
+        }
+        return screens(matching: names)
+    }
+
+    public static func coversAllScreens(_ screens: [NSScreen]) -> Bool {
+        let all = Set(NSScreen.screens.compactMap { displayID(of: $0) })
+        let selected = Set(screens.compactMap { displayID(of: $0) })
+        return !all.isEmpty && selected == all
+    }
 }

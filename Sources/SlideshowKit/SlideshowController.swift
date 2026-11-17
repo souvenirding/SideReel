@@ -24,6 +24,9 @@ public final class SlideshowController: ObservableObject {
     @Published public private(set) var isRunning = false
     @Published public private(set) var currentURL: URL?
 
+    /// 设置后用户点击/Esc 退出交由外部处理（外部负责 stop 或 freeze）；未设置时直接 stop。
+    public var onUserExit: (() -> Void)?
+
     private struct Player {
         let window: SlideshowWindow
         let imageView: NSImageView?
@@ -85,7 +88,7 @@ public final class SlideshowController: ObservableObject {
             let view = ClickExitView(frame: NSRect(origin: .zero, size: screen.frame.size))
             view.wantsLayer = true
             view.layer?.backgroundColor = NSColor.black.cgColor
-            view.onExit = { [weak self] in self?.stop() }
+            view.onExit = { [weak self] in self?.exitByUser() }
 
             var imageView: NSImageView?
             var collageView: CollageDriftView?
@@ -147,6 +150,28 @@ public final class SlideshowController: ObservableObject {
     }
 
     public func stop() {
+        teardown()
+        closeWindows()
+    }
+
+    /// 停止播放但保留窗口画面，等锁屏升起后再 closeWindows，避免露出桌面
+    public func freeze() {
+        teardown()
+    }
+
+    public func closeWindows() {
+        for player in players {
+            player.window.orderOut(nil)
+            player.window.close()
+        }
+        players = []
+    }
+
+    public func exitByUser() {
+        if let onUserExit { onUserExit() } else { stop() }
+    }
+
+    private func teardown() {
         loadGeneration += 1
         timer?.invalidate()
         timer = nil
@@ -160,11 +185,7 @@ public final class SlideshowController: ObservableObject {
         }
         for player in players {
             player.collageView?.stop()
-            player.imageView?.image = nil
-            player.window.orderOut(nil)
-            player.window.close()
         }
-        players = []
         sequence = nil
         if isRunning {
             isRunning = false

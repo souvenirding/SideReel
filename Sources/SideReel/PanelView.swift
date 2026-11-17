@@ -13,6 +13,7 @@ struct PanelView: View {
     @AppStorage(ConfigKeys.idleEnabled) private var idleEnabled = false
     @AppStorage(ConfigKeys.idleMinutes) private var idleMinutes = 5
     @AppStorage(ConfigKeys.keepAwake) private var keepAwake = true
+    @AppStorage(ConfigKeys.lockOnExit) private var lockOnExit = false
 
     @EnvironmentObject private var slideshow: SlideshowController
     @StateObject private var counter = FolderImageCounter()
@@ -130,6 +131,15 @@ struct PanelView: View {
                         .onChange(of: keepAwake) { _, on in
                             slideshow.setKeepAwake(on)
                         }
+
+                    Toggle("退出播放时锁定屏幕", isOn: $lockOnExit)
+                        .disabled(!coversAllScreens)
+                        .help("退出播放后进入系统登录界面，锁定所有显示器")
+                    if !coversAllScreens {
+                        Text("需选择全部显示器才可开启")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .padding(.vertical, 2)
                 .onChange(of: tileCount) { _, count in
@@ -246,6 +256,12 @@ struct PanelView: View {
         selectedNames.isEmpty
             ? "未选择时自动使用第一个外接显示器"
             : "已选 \(selectedNames.count) 台显示器，同时播放"
+    }
+
+    private var coversAllScreens: Bool {
+        ScreenUtils.coversAllScreens(
+            ScreenUtils.selectedScreens(names: Array(selectedNames))
+        )
     }
 
     private func screenBinding(for name: String) -> Binding<Bool> {

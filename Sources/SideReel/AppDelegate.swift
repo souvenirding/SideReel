@@ -5,10 +5,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let slideshow = SlideshowController()
     private let idleMonitor = IdleMonitor()
     private var statusItem: StatusItemController?
+    private var lockObserver: NSObjectProtocol?
+    private var lockClosePending = false
+    private var pendingTerminate = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
         statusItem = StatusItemController(slideshow: slideshow)
+        slideshow.onUserExit = { [weak self] in self?.handlePlaybackExit() }
 
         idleMonitor.onIdle = { [weak self] in
             guard let self, !self.slideshow.isRunning else { return }
@@ -41,16 +45,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let names = (defaults.string(forKey: ConfigKeys.screenNames) ?? "")
             .split(separator: "\n").map(String.init)
-        let screens: [NSScreen]
-        if names.isEmpty {
-            guard let target = ScreenUtils.defaultTarget() else {
-                return SlideshowError.noScreen.localizedDescription
-            }
-            screens = [target]
-        } else {
-            screens = ScreenUtils.screens(matching: names)
-            guard !screens.isEmpty else { return SlideshowError.noScreen.localizedDescription }
-        }
+        let screens = ScreenUtils.selectedScreens(names: names)
+        guard !screens.isEmpty else { return SlideshowError.noScreen.localizedDescription }
 
         do {
             try slideshow.start(
@@ -70,12 +66,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func stopSlideshow() {
-        slideshow.stop()
+        handlePlaybackExit()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard slideshow.isRunning, lockArmed() else { return .terminateNow }
+        pendingTerminate = true
+        handlePlaybackExit()
+        return .terminateLater
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         slideshow.stop()
         idleMonitor.stop()
+    }
+
+    private func handlePlaybackExit() {
+        guard slideshow.isRunning, !lockClosePending else { return }
+        guard lockArmed() else {
+            slideshow.stop()
+            return
+        }
+        // 先锁屏、冻住画面，等锁屏界面升起后再在其遮挡下关窗，避免闪一下桌面
+        lockClosePending = true
+        slideshow.freeze()
+        NSLog("SideReel: exit with lock, playback frozen")
+        guard ScreenLock.lock() else {
+            finishLockClose(reason: "lock unavailable")
+            return
+        }
+        lockObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.screenIsLocked"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.finishLockClose(reason: "screen locked")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            self?.finishLockClose(reason: "lock wait timeout")
+        }
+    }
+
+    private func finishLockClose(reason: String) {
+        guard lockClosePending else { return }
+        lockClosePending = false
+        if let lockObserver {
+            DistributedNotificationCenter.default().removeObserver(lockObserver)
+            self.lockObserver = nil
+        }
+        if !slideshow.isRunning {
+            slideshow.closeWindows()
+        }
+        NSLog("SideReel: closing playback windows (\(reason))")
+        if pendingTerminate {
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+    }
+
+    private func lockArmed() -> Bool {
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: ConfigKeys.lockOnExit) else { return false }
+        // 退出时重判覆盖状态：播放中热插拔导致不再覆盖全部屏幕时不锁屏
+        let names = (defaults.string(forKey: ConfigKeys.screenNames) ?? "")
+            .split(separator: "\n").map(String.init)
+        return ScreenUtils.coversAllScreens(ScreenUtils.selectedScreens(names: names))
     }
 
     private func setupMainMenu() {

@@ -11,6 +11,7 @@ enum ConfigKeys {
     static let idleEnabled = "idleEnabled"
     static let idleMinutes = "idleMinutes"
     static let keepAwake = "keepAwake"
+    static let lockOnExit = "lockOnExit"
 
     static func registerDefaults() {
         let defaults = UserDefaults.standard
@@ -29,6 +30,7 @@ enum ConfigKeys {
             idleEnabled: false,
             idleMinutes: 5,
             keepAwake: true,
+            lockOnExit: false,
         ])
     }
 }
