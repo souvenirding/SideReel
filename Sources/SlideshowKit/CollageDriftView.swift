@@ -81,6 +81,14 @@ public final class CollageDriftView: NSView {
         tiles = []
     }
 
+    // 纵向始终完整显示（含上下浮动余量），只有横向允许漂出屏幕
+    private func verticalRange(for tile: Tile) -> ClosedRange<CGFloat> {
+        let inset = tile.size.height / 2 + tile.bobAmp + 6
+        let lo = inset
+        let hi = bounds.height - inset
+        return lo <= hi ? lo...hi : (bounds.height / 2)...(bounds.height / 2)
+    }
+
     private func buildTiles() {
         let area = bounds.width * bounds.height
         let base = min(bounds.width, bounds.height)
@@ -93,11 +101,13 @@ public final class CollageDriftView: NSView {
             let depth = CGFloat.random(in: 0.6...1.0)
             // 景深主要影响速度与亮度，尺寸只轻微缩放，避免远处照片小到看不清
             let width = base * CGFloat.random(in: 0.26...0.38) * (0.8 + 0.2 * depth)
-            let center = CGPoint(
-                x: CGFloat.random(in: 0...bounds.width),
-                y: CGFloat.random(in: 0...bounds.height)
+            let tile = Tile(
+                depth: depth,
+                slotWidth: width,
+                center: CGPoint(x: CGFloat.random(in: 0...bounds.width), y: 0)
             )
-            newTiles.append(Tile(depth: depth, slotWidth: width, center: center))
+            tile.center.y = CGFloat.random(in: verticalRange(for: tile))
+            newTiles.append(tile)
         }
         newTiles.sort { $0.depth < $1.depth }
 
@@ -141,7 +151,7 @@ public final class CollageDriftView: NSView {
             let halfW = tile.size.width / 2
             if tile.center.x + halfW < -40 {
                 tile.center.x = bounds.width + halfW + 40
-                tile.center.y = CGFloat.random(in: 0...bounds.height)
+                tile.center.y = CGFloat.random(in: verticalRange(for: tile))
                 if !tile.loading && !tile.retiring {
                     tile.layer.removeAllAnimations()
                     tile.layer.opacity = 0
@@ -211,6 +221,8 @@ public final class CollageDriftView: NSView {
                 guard let image else { return }
                 let aspect = min(max(CGFloat(image.height) / CGFloat(image.width), 0.6), 1.7)
                 tile.size = CGSize(width: tile.slotWidth, height: tile.slotWidth * aspect)
+                let range = self.verticalRange(for: tile)
+                tile.center.y = min(max(tile.center.y, range.lowerBound), range.upperBound)
 
                 // 换图与淡入在同一事务内原子提交，避免新图以旧不透明度闪现一帧
                 CATransaction.begin()
@@ -218,6 +230,8 @@ public final class CollageDriftView: NSView {
                 tile.layer.bounds = CGRect(origin: .zero, size: tile.size)
                 tile.content.frame = tile.layer.bounds
                 tile.content.contents = image
+                let bob = sin(CGFloat(CACurrentMediaTime()) * 0.25 + tile.bobPhase) * tile.bobAmp
+                tile.layer.position = CGPoint(x: tile.center.x, y: tile.center.y + bob)
                 let fadeIn = CABasicAnimation(keyPath: "opacity")
                 fadeIn.fromValue = 0
                 fadeIn.toValue = tile.targetOpacity

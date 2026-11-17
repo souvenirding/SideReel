@@ -112,13 +112,17 @@ Timer.scheduledTimer(withTimeInterval: duration, repeats: false) { _ in
     }
 }
 
+func collageView() -> CollageDriftView? {
+    visibleEngineWindow()?.contentView?.subviews.first { $0 is CollageDriftView } as? CollageDriftView
+}
+
 func collageLayers() -> [CALayer] {
-    let collage = visibleEngineWindow()?.contentView?.subviews.first { $0 is CollageDriftView }
-    return collage?.layer?.sublayers ?? []
+    collageView()?.layer?.sublayers ?? []
 }
 
 var collageStartPositions: [CGPoint] = []
 var implicitViolations = 0
+var verticalViolations = 0
 var opacitySampler: Timer?
 func checkNoImplicitOpacity(_ layers: [CALayer], _ label: String) {
     let bad = layers.filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear", "retire"]) }
@@ -136,8 +140,13 @@ func startCollagePhase() {
         exit(1)
     }
     let sampler = Timer(timeInterval: 0.1, repeats: true) { _ in
-        let bad = collageLayers().filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear", "retire"]) }
+        let layers = collageLayers()
+        let bad = layers.filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear", "retire"]) }
         implicitViolations += bad.count
+        if let view = collageView() {
+            let h = view.bounds.height
+            verticalViolations += layers.filter { $0.frame.minY < -0.5 || $0.frame.maxY > h + 0.5 }.count
+        }
     }
     RunLoop.main.add(sampler, forMode: .common)
     opacitySampler = sampler
@@ -171,6 +180,7 @@ func startCollagePhase() {
     Timer.scheduledTimer(withTimeInterval: 10.0, repeats: false) { _ in
         opacitySampler?.invalidate()
         check(implicitViolations == 0, "no implicit opacity flash across whole collage phase (\(implicitViolations) violations)")
+        check(verticalViolations == 0, "tiles never clip top/bottom edges (\(verticalViolations) violations)")
         controller.stop()
         check(!controller.isRunning, "collage reports stopped")
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
