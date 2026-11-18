@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lockObserver: NSObjectProtocol?
     private var lockClosePending = false
     private var pendingTerminate = false
+    private var scheduleTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
@@ -19,6 +20,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             _ = self.startSlideshow()
         }
         applyIdleMonitor()
+        applySchedule()
+        let t = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.checkSchedule()
+        }
+        t.tolerance = 5
+        scheduleTimer = t
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.checkSchedule()
+        }
 
         if UserDefaults.standard.string(forKey: ConfigKeys.folderPath)?.isEmpty != false {
             // 状态栏在启动后需要短暂时间才能锚定 popover
@@ -38,8 +52,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applySchedule() {
+        checkSchedule()
+    }
+
+    private func checkSchedule() {
+        guard slideshow.isRunning, !TimeSchedule.isActive() else { return }
+        NSLog("SideReel: outside active schedule, stopping playback")
+        handlePlaybackExit()
+    }
+
     func startSlideshow() -> String? {
         let defaults = UserDefaults.standard
+        guard TimeSchedule.isActive() else { return "当前不在生效时间段内。" }
         let folderPath = defaults.string(forKey: ConfigKeys.folderPath) ?? ""
         guard !folderPath.isEmpty else { return "请先选择图片文件夹。" }
 
@@ -79,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         slideshow.stop()
         idleMonitor.stop()
+        scheduleTimer?.invalidate()
     }
 
     private func handlePlaybackExit() {

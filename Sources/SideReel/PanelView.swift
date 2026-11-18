@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import ServiceManagement
 import SlideshowKit
 import SwiftUI
@@ -15,6 +16,8 @@ struct PanelView: View {
     @AppStorage(ConfigKeys.idleMinutes) private var idleMinutes = 5
     @AppStorage(ConfigKeys.keepAwake) private var keepAwake = true
     @AppStorage(ConfigKeys.lockOnExit) private var lockOnExit = false
+    @AppStorage(ConfigKeys.scheduleStart) private var scheduleStart = 0
+    @AppStorage(ConfigKeys.scheduleEnd) private var scheduleEnd = TimeSchedule.dayEnd
 
     @EnvironmentObject private var slideshow: SlideshowController
     @StateObject private var counter = FolderImageCounter()
@@ -23,6 +26,7 @@ struct PanelView: View {
     @State private var quitHovering = false
     @State private var launchAtLogin = false
     @State private var launchNeedsApproval = false
+    @State private var scheduleActive = true
 
     private var appDelegate: AppDelegate? {
         NSApp.delegate as? AppDelegate
@@ -176,6 +180,38 @@ struct PanelView: View {
                 .onChange(of: idleMinutes) { appDelegate?.applyIdleMonitor() }
             }
 
+            GroupBox("生效时间") {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text("从")
+                        DatePicker("", selection: timeBinding($scheduleStart), displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                        Text("到")
+                        DatePicker("", selection: timeBinding($scheduleEnd), displayedComponents: .hourAndMinute)
+                            .labelsHidden()
+                        Spacer()
+                    }
+                    Text(scheduleHint)
+                        .font(.caption)
+                        .foregroundStyle(scheduleActive || slideshow.isRunning ? Color.secondary : Color.orange)
+                }
+                .padding(.vertical, 2)
+                .onChange(of: scheduleStart) { _, start in
+                    if start >= scheduleEnd {
+                        scheduleEnd = min(start + 1, TimeSchedule.dayEnd)
+                        if scheduleStart >= scheduleEnd { scheduleStart = scheduleEnd - 1 }
+                    }
+                    scheduleChanged()
+                }
+                .onChange(of: scheduleEnd) { _, end in
+                    if end <= scheduleStart {
+                        scheduleStart = max(end - 1, 0)
+                        if scheduleEnd <= scheduleStart { scheduleEnd = scheduleStart + 1 }
+                    }
+                    scheduleChanged()
+                }
+            }
+
             if let errorMessage {
                 Text(errorMessage)
                     .font(.caption)
@@ -192,7 +228,7 @@ struct PanelView: View {
             .buttonStyle(.borderedProminent)
             .tint(slideshow.isRunning ? .red : .accentColor)
             .controlSize(.large)
-            .disabled(folderPath.isEmpty && !slideshow.isRunning)
+            .disabled((folderPath.isEmpty || !scheduleActive) && !slideshow.isRunning)
 
             Text("播放时点击任意播放屏幕或按 Esc 退出")
                 .font(.caption)
@@ -219,6 +255,10 @@ struct PanelView: View {
             displays = ScreenUtils.displays()
             counter.setFolder(folderPath)
             refreshLaunchAtLogin()
+            scheduleActive = TimeSchedule.isActive()
+        }
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in
+            scheduleActive = TimeSchedule.isActive()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             displays = ScreenUtils.displays()
@@ -275,6 +315,34 @@ struct PanelView: View {
     private var coversAllScreens: Bool {
         ScreenUtils.coversAllScreens(
             ScreenUtils.selectedScreens(names: Array(selectedNames))
+        )
+    }
+
+    private var scheduleHint: String {
+        if scheduleStart == 0 && scheduleEnd == TimeSchedule.dayEnd { return "全天生效" }
+        if !scheduleActive { return "当前不在生效时间段内" }
+        return "仅此时间段内播放，到点自动停止"
+    }
+
+    private func scheduleChanged() {
+        scheduleActive = TimeSchedule.isActive()
+        appDelegate?.applySchedule()
+    }
+
+    private func timeBinding(_ minutes: Binding<Int>) -> Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(
+                    bySettingHour: minutes.wrappedValue / 60,
+                    minute: minutes.wrappedValue % 60,
+                    second: 0,
+                    of: Date()
+                ) ?? Date()
+            },
+            set: { date in
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
+                minutes.wrappedValue = (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
+            }
         )
     }
 
