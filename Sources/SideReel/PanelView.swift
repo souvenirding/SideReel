@@ -4,6 +4,11 @@ import ServiceManagement
 import SlideshowKit
 import SwiftUI
 
+private enum URLs {
+    /// /latest 会跳到最新正式版，免去手动核对版本号
+    static let releasesPage = URL(string: "https://github.com/souvenirding/SideReel/releases/latest")!
+}
+
 struct PanelView: View {
     @AppStorage(ConfigKeys.folderPath) private var folderPath = ""
     @AppStorage(ConfigKeys.screenNames) private var screenNamesRaw = ""
@@ -24,6 +29,7 @@ struct PanelView: View {
     @State private var displays: [DisplayInfo] = []
     @State private var errorMessage: String?
     @State private var quitHovering = false
+    @State private var releaseHovering = false
     @State private var launchAtLogin = false
     @State private var launchNeedsApproval = false
     @State private var scheduleActive = true
@@ -237,6 +243,28 @@ struct PanelView: View {
 
             Divider()
 
+            Button(action: openReleasesPage) {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.down.circle")
+                    Text("下载最新版本")
+                    Spacer()
+                    if let appVersion {
+                        Text("当前 v\(appVersion)")
+                            .font(.caption)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption)
+                }
+                .font(.callout)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(releaseHovering ? Color.accentColor : Color.secondary)
+            .onHover { releaseHovering = $0 }
+            .help("在浏览器中打开 \(URLs.releasesPage.absoluteString)")
+
             Button(action: { NSApp.terminate(nil) }) {
                 Label("退出 SideReel", systemImage: "power")
                     .font(.callout)
@@ -296,6 +324,10 @@ struct PanelView: View {
 
     private var folderName: String {
         URL(fileURLWithPath: folderPath).lastPathComponent
+    }
+
+    private var appVersion: String? {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
     }
 
     private var selectedNames: Set<String> {
@@ -388,6 +420,10 @@ struct PanelView: View {
             folderPath = url.path
             errorMessage = nil
         }
+    }
+
+    private func openReleasesPage() {
+        NSWorkspace.shared.open(URLs.releasesPage)
     }
 
     private func togglePlayback() {
