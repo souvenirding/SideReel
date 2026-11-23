@@ -120,24 +120,27 @@ func collageLayers() -> [CALayer] {
     collageView()?.layer?.sublayers ?? []
 }
 
-var collageStartPositions: [CGPoint] = []
+let maxCollageTiles = 9
+var collageStartFrames: [ObjectIdentifier: CGRect] = [:]
 var implicitViolations = 0
 var verticalViolations = 0
-var replacementsObserved = 0
-var relocationViolations = 0
+var overlapViolations = 0
+var swapViolations = 0
+var prematureExitViolations = 0
+var rightwardViolations = 0
 var lastContents: [ObjectIdentifier: AnyObject] = [:]
-var lastPositions: [ObjectIdentifier: CGPoint] = [:]
-var pendingJump: [ObjectIdentifier: Bool] = [:]
+var lastFrames: [ObjectIdentifier: CGRect] = [:]
 var opacitySampler: Timer?
+
 func checkNoImplicitOpacity(_ layers: [CALayer], _ label: String) {
-    let bad = layers.filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear", "retire"]) }
+    let bad = layers.filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear"]) }
     check(bad.isEmpty, "no implicit opacity animations (\(label))")
 }
 func startCollagePhase() {
     do {
         try controller.start(
             folder: folder, screens: [screen], interval: 2, order: .shuffle,
-            keepAwake: true, mode: .collage, driftSpeed: 60, tileCount: 9
+            keepAwake: true, mode: .collage, driftSpeed: 60, tileCount: maxCollageTiles
         )
         check(true, "collage started")
     } catch {
@@ -146,27 +149,33 @@ func startCollagePhase() {
     }
     let sampler = Timer(timeInterval: 0.1, repeats: true) { _ in
         let layers = collageLayers()
-        let bad = layers.filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear", "retire"]) }
+        let bad = layers.filter { !Set($0.animationKeys() ?? []).isSubset(of: ["appear"]) }
         implicitViolations += bad.count
         if let view = collageView() {
             let h = view.bounds.height
             verticalViolations += layers.filter { $0.frame.minY < -0.5 || $0.frame.maxY > h + 0.5 }.count
-        }
-        for layer in layers {
-            let key = ObjectIdentifier(layer)
-            let pos = layer.position
-            // 挪位先于新图到达（异步加载），先记下大位移，等内容变化时消费
-            if let oldPos = lastPositions[key], hypot(pos.x - oldPos.x, pos.y - oldPos.y) > 150 {
-                pendingJump[key] = true
+            let frames = layers.map { $0.frame }
+            for i in frames.indices {
+                for j in (i + 1)..<frames.count where frames[i].intersects(frames[j]) { overlapViolations += 1 }
             }
-            let contents = layer.sublayers?.first?.contents as AnyObject?
-            if let old = lastContents[key], let c = contents, old !== c {
-                replacementsObserved += 1
-                if pendingJump[key] != true { relocationViolations += 1 }
-                pendingJump[key] = false
+            for layer in layers {
+                let key = ObjectIdentifier(layer)
+                let frame = layer.frame
+                if let old = lastFrames[key], frame.minX > old.minX + 1 { rightwardViolations += 1 }
+                let contents = layer.sublayers?.first?.contents as AnyObject?
+                if let old = lastContents[key], let c = contents, old !== c { swapViolations += 1 }
+                if let c = contents { lastContents[key] = c }
+                lastFrames[key] = frame
             }
-            if let c = contents { lastContents[key] = c }
-            lastPositions[key] = pos
+            let live = Set(layers.map { ObjectIdentifier($0) })
+            let gone = lastFrames.keys.filter { !live.contains($0) }
+            for key in gone {
+                // 上一帧还整张在屏内就没了 = 原地消失
+                if let f = lastFrames[key], f.minX > 2, f.maxX < view.bounds.width - 2 {
+                    prematureExitViolations += 1
+                }
+                lastFrames[key] = nil
+            }
         }
     }
     RunLoop.main.add(sampler, forMode: .common)
@@ -175,25 +184,38 @@ func startCollagePhase() {
         check(visibleEngineWindow()?.frame == screen.frame, "collage window covers screen")
         check(controller.currentURL != nil, "collage loaded first tile image")
         let layers = collageLayers()
-        check(layers.count == 9, "collage honors configured tile count (got \(layers.count), want 9)")
+        check(layers.count > 0 && layers.count <= maxCollageTiles,
+              "collage stays within configured tile cap (got \(layers.count), max \(maxCollageTiles))")
         check(layers.contains { $0.sublayers?.first?.contents != nil }, "collage tiles loading images")
         checkNoImplicitOpacity(layers, "2.5s")
-        collageStartPositions = layers.map { $0.position }
+        collageStartFrames = Dictionary(uniqueKeysWithValues: layers.map { (ObjectIdentifier($0), $0.frame) })
     }
     Timer.scheduledTimer(withTimeInterval: 4.5, repeats: false) { _ in
         let layers = collageLayers()
         check(layers.allSatisfy { $0.sublayers?.first?.contents != nil }, "all collage tiles have images")
         let base = min(screen.frame.width, screen.frame.height)
         let widths = layers.map { $0.bounds.width }
-        let inRange = widths.allSatisfy { $0 >= base * 0.239 - 1 && $0 <= base * 0.38 + 1 }
-        check(inRange, "tile widths within 24%~38% of short edge (min \(widths.min() ?? 0), max \(widths.max() ?? 0), base \(base))")
+        let inRange = widths.allSatisfy { $0 >= base * 0.199 - 1 && $0 <= base * 0.32 + 1 }
+        check(inRange, "tile widths within 20%~32% of short edge (min \(widths.min() ?? 0), max \(widths.max() ?? 0), base \(base))")
         checkNoImplicitOpacity(layers, "4.5s")
-        let visible = layers.filter { $0.opacity > 0.5 }.count
-        check(visible >= layers.count / 2, "most collage tiles visible (\(visible)/\(layers.count))")
-        let moved = zip(collageStartPositions, layers.map { $0.position })
-            .filter { abs($0.x - $1.x) > 20 || abs($0.y - $1.y) > 2 }
-        check(!collageStartPositions.isEmpty && moved.count >= collageStartPositions.count / 2,
-              "collage tiles drift over time (\(moved.count) moved)")
+        let onScreen = layers.filter { $0.frame.maxX > 0 && $0.frame.minX < screen.frame.width }.count
+        check(onScreen >= 4, "collage keeps photos on screen (\(onScreen) in view)")
+        // 照片墙：横向区间相交的两张必然纵向错开（全局重叠检查已保证），说明不是单行排列
+        let frames = layers.map { $0.frame }
+        var staggered = 0
+        for i in frames.indices {
+            for j in (i + 1)..<frames.count
+            where frames[i].minX < frames[j].maxX && frames[j].minX < frames[i].maxX { staggered += 1 }
+        }
+        check(staggered >= 2, "wall staggers photos vertically, not a single row (\(staggered) x-overlapping pairs)")
+        var moved = 0
+        var still = 0
+        for layer in layers {
+            guard let start = collageStartFrames[ObjectIdentifier(layer)] else { continue }
+            still += 1
+            if start.minX - layer.frame.minX > 20 { moved += 1 }
+        }
+        check(still > 0 && moved == still, "every tile drifts leftward (\(moved)/\(still))")
     }
     Timer.scheduledTimer(withTimeInterval: 5.3, repeats: false) { _ in
         checkNoImplicitOpacity(collageLayers(), "5.3s")
@@ -202,8 +224,10 @@ func startCollagePhase() {
         opacitySampler?.invalidate()
         check(implicitViolations == 0, "no implicit opacity flash across whole collage phase (\(implicitViolations) violations)")
         check(verticalViolations == 0, "tiles never clip top/bottom edges (\(verticalViolations) violations)")
-        check(replacementsObserved >= 1, "observed image replacements (\(replacementsObserved))")
-        check(relocationViolations == 0, "replaced photos appear at a new location (\(relocationViolations) violations)")
+        check(overlapViolations == 0, "photos never overlap (\(overlapViolations) violations)")
+        check(swapViolations == 0, "a photo keeps its image until it leaves the screen (\(swapViolations) swaps)")
+        check(prematureExitViolations == 0, "photos leave only by drifting off the left edge (\(prematureExitViolations) violations)")
+        check(rightwardViolations == 0, "photos never move rightward (\(rightwardViolations) violations)")
         controller.stop()
         check(!controller.isRunning, "collage reports stopped")
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in

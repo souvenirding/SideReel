@@ -1,39 +1,51 @@
 import AppKit
 import ImageIO
 
+/// 照片墙式漂移：照片以随机位置铺成一面墙，整墙同速向左。
+/// 排布时按"占位矩形"互斥挑选位置，又因为所有照片速度一致、相对位置恒定，
+/// 一旦落位不重叠就永远不重叠；新照片只在屏幕右边缘之外找空位，
+/// 因此只会从右侧滑入、左侧滑出，中途不换图、不淡出，允许留白。
 public final class CollageDriftView: NSView {
     private final class Tile {
         let layer = CALayer()
         let content = CALayer()
         let depth: CGFloat
-        let slotWidth: CGFloat
-        var size: CGSize
+        let size: CGSize
         var center: CGPoint
         let bobPhase: CGFloat
         let bobAmp: CGFloat
-        var targetOpacity: Float
-        var loading = false
-        var retiring = false
+        let targetOpacity: Float
+        var released = false
 
-        init(depth: CGFloat, slotWidth: CGFloat, center: CGPoint) {
+        init(depth: CGFloat, size: CGSize, center: CGPoint) {
             self.depth = depth
-            self.slotWidth = slotWidth
-            self.size = CGSize(width: slotWidth, height: slotWidth)
+            self.size = size
             self.center = center
             self.bobPhase = CGFloat.random(in: 0..<(2 * .pi))
-            self.bobAmp = CGFloat.random(in: 5...14)
+            self.bobAmp = CGFloat.random(in: 4...9)
             self.targetOpacity = Float(0.72 + 0.28 * depth)
         }
+
+        var rect: CGRect {
+            CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
+                   width: size.width, height: size.height)
+        }
+
+        // 投影横向扩散 + 上下浮动都算进占位，视觉上照片之间始终隔出一条缝
+        var reservedRect: CGRect {
+            rect.insetBy(dx: -Tile.shadowPad, dy: -(bobAmp + Tile.shadowPad))
+        }
+
+        static let shadowPad: CGFloat = 20
     }
 
     private let speed: CGFloat
-    private let tileCount: Int
+    private let maxTiles: Int
     private let nextURL: () -> URL?
     private let onImageShown: ((URL) -> Void)?
 
     private var tiles: [Tile] = []
     private var tickTimer: Timer?
-    private var replaceTimer: Timer?
     private var lastTick: CFTimeInterval = 0
     private var generation = 0
 
@@ -45,7 +57,7 @@ public final class CollageDriftView: NSView {
         onImageShown: ((URL) -> Void)? = nil
     ) {
         self.speed = CGFloat(min(max(speed, 4), 120))
-        self.tileCount = min(max(tileCount, 4), 30)
+        self.maxTiles = min(max(tileCount, 4), 30)
         self.nextURL = nextURL
         self.onImageShown = onImageShown
         super.init(frame: frame)
@@ -60,7 +72,7 @@ public final class CollageDriftView: NSView {
     public func start() {
         stop()
         generation += 1
-        buildTiles()
+        seedWall()
         lastTick = CACurrentMediaTime()
         let tick = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
             self?.tick()
@@ -68,73 +80,109 @@ public final class CollageDriftView: NSView {
         tick.tolerance = 0.005
         RunLoop.main.add(tick, forMode: .common)
         tickTimer = tick
-        scheduleReplacement()
     }
 
     public func stop() {
         generation += 1
         tickTimer?.invalidate()
         tickTimer = nil
-        replaceTimer?.invalidate()
-        replaceTimer = nil
-        for tile in tiles { tile.layer.removeFromSuperlayer() }
+        for tile in tiles {
+            tile.released = true
+            tile.layer.removeAllAnimations()
+            tile.layer.removeFromSuperlayer()
+        }
         tiles = []
     }
 
-    // 纵向始终完整显示（含上下浮动余量），只有横向允许漂出屏幕
-    private func verticalRange(for tile: Tile) -> ClosedRange<CGFloat> {
-        let inset = tile.size.height / 2 + tile.bobAmp + 6
-        let lo = inset
-        let hi = bounds.height - inset
-        return lo <= hi ? lo...hi : (bounds.height / 2)...(bounds.height / 2)
+    private var shortEdge: CGFloat { min(bounds.width, bounds.height) }
+
+    // 上下各留出的余量：浮动幅度上限 9 + 投影纵向扩散
+    private var verticalPad: CGFloat { 9 + Tile.shadowPad }
+
+    // 一张照片的可摆放纵向区间（底边原点）
+    private func verticalRange(for size: CGSize) -> ClosedRange<CGFloat>? {
+        let lo = verticalPad
+        let hi = bounds.height - verticalPad - size.height
+        return lo <= hi ? lo...hi : nil
     }
 
-    private func buildTiles() {
-        let area = bounds.width * bounds.height
-        let base = min(bounds.width, bounds.height)
-        guard area > 0, base > 0 else { return }
-        let count = tileCount
-        let scale = window?.backingScaleFactor ?? 2
+    private func photoXRange(for size: CGSize) -> ClosedRange<CGFloat>? {
+        let lo = bounds.width
+        let hi = bounds.width + max(0, shortEdge * 0.9 - size.width)
+        return lo <= hi ? lo...hi : nil
+    }
 
-        var newTiles: [Tile] = []
-        for _ in 0..<count {
-            let depth = CGFloat.random(in: 0.6...1.0)
-            // 景深主要影响速度与亮度，尺寸只轻微缩放，避免远处照片小到看不清
-            let width = base * CGFloat.random(in: 0.26...0.38) * (0.8 + 0.2 * depth)
-            let tile = Tile(
-                depth: depth,
-                slotWidth: width,
-                center: CGPoint(x: CGFloat.random(in: 0...bounds.width), y: 0)
-            )
-            tile.center.y = CGFloat.random(in: verticalRange(for: tile))
-            newTiles.append(tile)
+    /// 先定尺寸再找位置：尺寸取自图片真实宽高比，占位才算得准
+    private func nextPhotoSize() -> (url: URL, size: CGSize)? {
+        for _ in 0..<4 {
+            guard let url = nextURL() else { return nil }
+            let width = shortEdge * CGFloat.random(in: 0.20...0.32)
+            let height = width * Self.aspect(of: url)
+            guard height <= bounds.height - 2 * verticalPad, width <= bounds.width else { continue }
+            return (url, CGSize(width: width, height: height))
         }
-        newTiles.sort { $0.depth < $1.depth }
+        return nil
+    }
 
-        for (index, tile) in newTiles.enumerated() {
-            let layer = tile.layer
-            layer.bounds = CGRect(origin: .zero, size: tile.size)
-            layer.position = tile.center
-            layer.shadowColor = NSColor.black.cgColor
-            layer.shadowOpacity = 0.55
-            layer.shadowRadius = 18
-            layer.shadowOffset = CGSize(width: 0, height: -8)
-            layer.shouldRasterize = true
-            layer.rasterizationScale = scale
-            layer.opacity = 0
+    /// 在给定横向区间内随机采样，取最靠左的空位（靠左即最快滑进画面，墙才铺得满）
+    private func findFreeSpot(for size: CGSize, xRange: ClosedRange<CGFloat>) -> CGPoint? {
+        guard let yRange = verticalRange(for: size) else { return nil }
+        var best: (leftEdge: CGFloat, center: CGPoint)?
+        for _ in 0..<48 {
+            let leftEdge = CGFloat.random(in: xRange)
+            let bottom = CGFloat.random(in: yRange)
+            // 候选位按最大浮动量占位（落位后本张的浮动只会更小），占位互斥才成立
+            let candidate = CGRect(x: leftEdge - Tile.shadowPad, y: bottom - verticalPad,
+                                   width: size.width + 2 * Tile.shadowPad,
+                                   height: size.height + 2 * verticalPad)
+            let hit = tiles.contains { $0.reservedRect.intersects(candidate) }
+            if hit { continue }
+            let center = CGPoint(x: leftEdge + size.width / 2, y: bottom + size.height / 2)
+            if best == nil || leftEdge < best!.leftEdge { best = (leftEdge, center) }
+        }
+        return best?.center
+    }
 
-            let content = tile.content
-            content.frame = layer.bounds
-            content.cornerRadius = 12
-            content.masksToBounds = true
-            content.contentsGravity = .resizeAspect
-            content.backgroundColor = NSColor(white: 1, alpha: 0.04).cgColor
-            content.borderWidth = 1
-            content.borderColor = NSColor(white: 1, alpha: 0.10).cgColor
-            layer.addSublayer(content)
-            self.layer?.addSublayer(layer)
-            tiles.append(tile)
-            loadImage(for: tile, fadeInDelay: Double(index) * 0.08)
+    private func install(_ url: URL, size: CGSize, center: CGPoint) {
+        let tile = Tile(depth: CGFloat.random(in: 0.6...1.0), size: size, center: center)
+        let layer = tile.layer
+        layer.bounds = CGRect(origin: .zero, size: size)
+        layer.position = center
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOpacity = 0.5
+        layer.shadowRadius = 12
+        layer.shadowOffset = CGSize(width: 0, height: -6)
+        layer.shouldRasterize = true
+        layer.rasterizationScale = window?.backingScaleFactor ?? 2
+        layer.opacity = 0
+
+        let content = tile.content
+        content.frame = layer.bounds
+        content.cornerRadius = 12
+        content.masksToBounds = true
+        content.contentsGravity = .resizeAspect
+        content.backgroundColor = NSColor(white: 1, alpha: 0.04).cgColor
+        content.borderWidth = 1
+        content.borderColor = NSColor(white: 1, alpha: 0.10).cgColor
+        layer.addSublayer(content)
+        self.layer?.addSublayer(layer)
+        tiles.append(tile)
+        loadImage(url, for: tile)
+    }
+
+    // 起始画面：在可见区域内随机撒满一整面墙，每张都完整在屏内
+    private func seedWall() {
+        guard bounds.width > 0, shortEdge > 0 else { return }
+        var misses = 0
+        while tiles.count < maxTiles, misses < maxTiles * 2 {
+            guard let (url, size) = nextPhotoSize() else { return }
+            let xLo: CGFloat = 0
+            let xHi = max(xLo, bounds.width - size.width)
+            guard let center = findFreeSpot(for: size, xRange: xLo...xHi) else {
+                misses += 1
+                continue
+            }
+            install(url, size: size, center: center)
         }
     }
 
@@ -146,133 +194,67 @@ public final class CollageDriftView: NSView {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        let dx = speed * CGFloat(dt)
+        for tile in tiles { tile.center.x -= dx }
+        pruneExitedTiles()
+        feedWall()
         for tile in tiles {
-            tile.center.x -= speed * tile.depth * CGFloat(dt)
-            let halfW = tile.size.width / 2
-            if tile.center.x + halfW < -40 {
-                tile.center.x = bounds.width + halfW + 40
-                tile.center.y = CGFloat.random(in: verticalRange(for: tile))
-                if !tile.loading && !tile.retiring {
-                    tile.layer.removeAllAnimations()
-                    tile.layer.opacity = 0
-                    loadImage(for: tile, fadeInDelay: 0)
-                }
-            }
-            let bob = sin(CGFloat(now) * 0.25 + tile.bobPhase) * tile.bobAmp
+            let bob = sin(now * 0.25 + tile.bobPhase) * tile.bobAmp
             tile.layer.position = CGPoint(x: tile.center.x, y: tile.center.y + bob)
         }
         CATransaction.commit()
     }
 
-    private func scheduleReplacement() {
-        let t = Timer(timeInterval: Double.random(in: 3.5...6.5), repeats: false) { [weak self] _ in
-            self?.replaceOneTile()
-            self?.scheduleReplacement()
-        }
-        t.tolerance = 0.5
-        RunLoop.main.add(t, forMode: .common)
-        replaceTimer = t
-    }
-
-    // 换图时挑一个新位置：随机采样候选点，选与其他照片重叠最小的空位，
-    // 并强制远离原位置，让"新照片出现在别处"清晰可感
-    private func replacementCenter(for tile: Tile) -> CGPoint {
-        let halfW = tile.size.width / 2
-        let halfH = tile.size.height / 2
-        let margin: CGFloat = 12
-        let xLo = halfW + margin
-        let xHi = bounds.width - halfW - margin
-        guard xLo <= xHi else { return tile.center }
-        let yRange = verticalRange(for: tile)
-        let minDist = min(bounds.width, bounds.height) * 0.3
-        var best = tile.center
-        var bestScore = CGFloat.greatestFiniteMagnitude
-        for _ in 0..<16 {
-            let p = CGPoint(x: .random(in: xLo...xHi), y: .random(in: yRange))
-            var overlap: CGFloat = 0
-            for other in tiles where other !== tile {
-                let dx = min(p.x + halfW, other.center.x + other.size.width / 2)
-                    - max(p.x - halfW, other.center.x - other.size.width / 2)
-                let dy = min(p.y + halfH, other.center.y + other.size.height / 2)
-                    - max(p.y - halfH, other.center.y - other.size.height / 2)
-                if dx > 0, dy > 0 { overlap += dx * dy }
-            }
-            let dist = hypot(p.x - tile.center.x, p.y - tile.center.y)
-            let score = overlap + (dist < minDist ? 1e9 : 0)
-            if score < bestScore {
-                bestScore = score
-                best = p
+    private func pruneExitedTiles() {
+        var kept: [Tile] = []
+        kept.reserveCapacity(tiles.count)
+        for tile in tiles {
+            if tile.center.x + tile.size.width / 2 <= 0 {
+                tile.released = true
+                tile.layer.removeAllAnimations()
+                tile.layer.removeFromSuperlayer()
+            } else {
+                kept.append(tile)
             }
         }
-        return best
+        tiles = kept
     }
 
-    private func replaceOneTile() {
-        let candidates = tiles.filter { tile in
-            !tile.loading && !tile.retiring
-                && tile.center.x - tile.size.width / 2 > 0
-                && tile.center.x + tile.size.width / 2 < bounds.width
-                && tile.center.y - tile.size.height / 2 > 0
-                && tile.center.y + tile.size.height / 2 < bounds.height
+    // 右侧续图：只在屏幕右边缘之外找空位，滑进来即开始可见；找不到就下个 tick 再试
+    private func feedWall() {
+        guard bounds.width > 0, shortEdge > 0 else { return }
+        if tiles.isEmpty {
+            seedWall()
+            return
         }
-        guard let tile = candidates.randomElement() else { return }
-        tile.retiring = true
-        let fadeOut = CABasicAnimation(keyPath: "opacity")
-        fadeOut.fromValue = tile.layer.opacity
-        fadeOut.toValue = 0
-        fadeOut.duration = 0.9
-        fadeOut.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-        fadeOut.fillMode = .forwards
-        fadeOut.isRemovedOnCompletion = false
-        CATransaction.begin()
-        CATransaction.setCompletionBlock { [weak self, weak tile] in
-            guard let self, let tile, tile.retiring else { return }
-            // 必须禁用隐式动画：否则 removeAllAnimations 后设置 opacity=0
-            // 会触发 0.25s 的隐式淡出，表现为照片闪回全亮再变暗
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            tile.layer.removeAllAnimations()
-            tile.layer.opacity = 0
-            tile.center = self.replacementCenter(for: tile)
-            tile.layer.position = tile.center
-            CATransaction.commit()
-            tile.retiring = false
-            self.loadImage(for: tile, fadeInDelay: 0)
+        while tiles.count < maxTiles {
+            guard let (url, size) = nextPhotoSize() else { return }
+            guard let xRange = photoXRange(for: size),
+                  let center = findFreeSpot(for: size, xRange: xRange) else { return }
+            install(url, size: size, center: center)
         }
-        tile.layer.add(fadeOut, forKey: "retire")
-        CATransaction.commit()
     }
 
-    private func loadImage(for tile: Tile, fadeInDelay: Double) {
-        guard let url = nextURL() else { return }
-        tile.loading = true
+    private func loadImage(_ url: URL, for tile: Tile) {
         let gen = generation
-        let maxPixel = Int(max(tile.slotWidth, tile.slotWidth * 1.7) * 2)
+        let maxPixel = Int(max(tile.size.width, tile.size.height) * 2)
         DispatchQueue.global(qos: .userInitiated).async { [weak self, weak tile] in
             let image = Self.downsample(url: url, maxPixel: maxPixel)
             DispatchQueue.main.async {
-                guard let self, let tile, self.generation == gen else { return }
-                tile.loading = false
+                guard let self, let tile, self.generation == gen, !tile.released else { return }
                 guard let image else { return }
-                let aspect = min(max(CGFloat(image.height) / CGFloat(image.width), 0.6), 1.7)
-                tile.size = CGSize(width: tile.slotWidth, height: tile.slotWidth * aspect)
-                let range = self.verticalRange(for: tile)
-                tile.center.y = min(max(tile.center.y, range.lowerBound), range.upperBound)
 
-                // 换图与淡入在同一事务内原子提交，避免新图以旧不透明度闪现一帧
                 CATransaction.begin()
                 CATransaction.setDisableActions(true)
-                tile.layer.bounds = CGRect(origin: .zero, size: tile.size)
-                tile.content.frame = tile.layer.bounds
                 tile.content.contents = image
                 let bob = sin(CGFloat(CACurrentMediaTime()) * 0.25 + tile.bobPhase) * tile.bobAmp
                 tile.layer.position = CGPoint(x: tile.center.x, y: tile.center.y + bob)
+                // 图片到位前保持空白槽位，到屏后直接亮起，不做淡出换图
                 let fadeIn = CABasicAnimation(keyPath: "opacity")
                 fadeIn.fromValue = 0
                 fadeIn.toValue = tile.targetOpacity
-                fadeIn.duration = 1.1
-                fadeIn.beginTime = CACurrentMediaTime() + fadeInDelay
-                fadeIn.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                fadeIn.duration = 0.35
+                fadeIn.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 fadeIn.fillMode = .backwards
                 tile.layer.opacity = tile.targetOpacity
                 tile.layer.add(fadeIn, forKey: "appear")
@@ -280,6 +262,21 @@ public final class CollageDriftView: NSView {
                 self.onImageShown?(url)
             }
         }
+    }
+
+    /// 只读文件头拿宽高比：落位前就要确定整张尺寸，占位才算得准
+    private static func aspect(of url: URL) -> CGFloat {
+        let options = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, options),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let pixelWidth = props[kCGImagePropertyPixelWidth] as? NSNumber,
+              let pixelHeight = props[kCGImagePropertyPixelHeight] as? NSNumber,
+              pixelWidth.doubleValue > 0, pixelHeight.doubleValue > 0
+        else { return 1 }
+        var ratio = pixelHeight.doubleValue / pixelWidth.doubleValue
+        let orientation = (props[kCGImagePropertyOrientation] as? NSNumber)?.uint32Value ?? 1
+        if orientation >= 5 { ratio = 1 / ratio }
+        return min(max(CGFloat(ratio), 0.6), 1.7)
     }
 
     private static func downsample(url: URL, maxPixel: Int) -> CGImage? {

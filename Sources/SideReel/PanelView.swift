@@ -110,7 +110,7 @@ struct PanelView: View {
                         }
 
                         HStack(spacing: 6) {
-                            Text("同屏照片数")
+                            Text("同屏照片上限")
                             Spacer()
                             TextField("", value: $tileCount, format: .number)
                                 .frame(width: 48)
