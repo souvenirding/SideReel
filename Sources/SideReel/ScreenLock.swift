@@ -1,6 +1,13 @@
+import CoreGraphics
 import Foundation
 
 enum ScreenLock {
+    static func isScreenLocked() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+            return false
+        }
+        return session["CGSSessionScreenIsLocked"] as? Bool == true
+    }
     private static let cgSessionPath =
         "/System/Library/CoreServices/Menu Extras/User.menu/Contents/Resources/CGSession"
 

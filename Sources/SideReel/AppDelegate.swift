@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         idleMonitor.onIdle = { [weak self] in
             guard let self, !self.slideshow.isRunning else { return }
+            guard self.canAutoStart() else { return }
             _ = self.startSlideshow()
         }
         applyIdleMonitor()
@@ -147,6 +148,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if pendingTerminate {
             NSApp.reply(toApplicationShouldTerminate: true)
         }
+    }
+
+    // 锁屏或目标显示器息屏时不自动开始，避免在锁屏背后/黑屏上启动播放
+    private func canAutoStart() -> Bool {
+        if ScreenLock.isScreenLocked() { return false }
+        let screens = targetScreens()
+        return !screens.isEmpty && screens.allSatisfy { !ScreenUtils.isAsleep($0) }
+    }
+
+    private func targetScreens() -> [NSScreen] {
+        let names = (UserDefaults.standard.string(forKey: ConfigKeys.screenNames) ?? "")
+            .split(separator: "\n").map(String.init)
+        return ScreenUtils.selectedScreens(names: names)
     }
 
     private func lockArmed() -> Bool {

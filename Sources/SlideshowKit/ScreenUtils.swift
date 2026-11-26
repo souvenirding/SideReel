@@ -56,6 +56,11 @@ public enum ScreenUtils {
         return screens(matching: names)
     }
 
+    public static func isAsleep(_ screen: NSScreen) -> Bool {
+        guard let id = displayID(of: screen) else { return true }
+        return CGDisplayIsAsleep(id) != 0
+    }
+
     public static func coversAllScreens(_ screens: [NSScreen]) -> Bool {
         let all = Set(NSScreen.screens.compactMap { displayID(of: $0) })
         let selected = Set(screens.compactMap { displayID(of: $0) })
